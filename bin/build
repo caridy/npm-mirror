@@ -1,0 +1,213 @@
+#!/usr/bin/env node
+
+var libfs       = require('fs');
+var libpath     = require('path');
+var walk        = require('walk');
+var semver      = require('semver');
+var Promise     = (typeof Promise !== 'undefined') || require('ypromise');
+var npm         = require('npm');
+var sha         = require('sha');
+
+var REGISTRY = '/Users/caridy/Downloads/registry';
+var SYNTHETIC_REGISTRY = libpath.join(__dirname, '../synthetic-registry');
+
+function walkNPMPackage(dir, packages) {
+    var pkg,
+        file,
+        subdirs;
+
+    packages = packages || {};
+
+    file = libpath.resolve(dir, 'package.json');
+    try {
+        pkg = require(file);
+        if (pkg._id && !pkg.private && (!pkg.repository || !pkg.repository.url ||
+                (
+                    pkg.repository.url.indexOf('git@git.corp') !== 0 &&
+                    pkg.repository.url.indexOf('git://git.corp') !== 0 &&
+                    pkg.repository.url.indexOf('http://git.corp') !== 0 &&
+                    pkg.repository.url.indexOf('https://git.corp') !== 0
+                )
+        )) {
+            packages[pkg._id] = {
+                file: file,
+                name: pkg.name,
+                version: pkg.version
+            };
+        }
+    } catch (packageErr) {
+        console.warn('Ignoring: ' + libpath.dirname(file));
+        return packages;
+    }
+
+    walkNodeModules(libpath.join(dir, 'node_modules'), packages);
+    return packages;
+}
+
+function walkNodeModules(dir, packages) {
+    var subdirs;
+
+    packages = packages || {};
+
+    try {
+        subdirs = libfs.readdirSync(dir);
+    } catch (readdirErr) {
+        // missing directory is OK
+        return packages;
+    }
+    subdirs.forEach(function (subdir) {
+        var pkgPath = libpath.join(dir, subdir);
+        if ('.' === subdir.substring(0, 1)) {
+            return;
+        }
+        try {
+            if (pkgPath === libfs.realpathSync(pkgPath)) {
+                // ignore symlinks
+                walkNPMPackage(pkgPath, packages);
+            }
+        } catch (ignoring) {
+            // this is to avoid the trap of the filesystem limits, run it again!
+        }
+    });
+    return packages;
+}
+
+console.log('Analyzing folder: ' + process.cwd());
+var pkgs = walkNodeModules(process.cwd());
+
+Promise.all(Object.keys(pkgs).map(function (pkgVersion) {
+    var pkg = pkgs[pkgVersion];
+    var pkgPath = pkg.file;
+    var pkgJSON = require(pkgPath);
+    var name = pkg.name;
+    var version = pkg.version;
+    var index;
+
+    try {
+        // checking if the folder exists
+        libfs.statSync(libpath.join(SYNTHETIC_REGISTRY, name));
+    } catch (e) {
+        libfs.mkdir(libpath.join(SYNTHETIC_REGISTRY, name), 0755);
+    }
+
+    try {
+        // checking if the tarball folder exists
+        libfs.statSync(libpath.join(SYNTHETIC_REGISTRY, name, '-'));
+    } catch (e) {
+        libfs.mkdir(libpath.join(SYNTHETIC_REGISTRY, name, '-'), 0755);
+    }
+
+    try {
+        // checking if the folder exists
+        index = require(libpath.join(SYNTHETIC_REGISTRY, name, 'index.json'));
+    } catch (e) {
+        index = {
+            "name": name,
+            "dist-tags": {
+                "latest": null
+            },
+            "versions": {}
+        };
+        libfs.writeFileSync(libpath.join(SYNTHETIC_REGISTRY, name, 'index.json'),
+                JSON.stringify(index, null, 2));
+    }
+
+    try {
+        // checking if the version folder exists
+        libfs.statSync(libpath.join(SYNTHETIC_REGISTRY, name, version));
+    } catch (e) {
+        libfs.mkdir(libpath.join(SYNTHETIC_REGISTRY, name, version), 0755);
+    }
+
+    try {
+        // checking if the version index.json exists
+        libfs.statSync(libpath.join(SYNTHETIC_REGISTRY, name, version, 'index.json'));
+    } catch (e) {
+        libfs.writeFileSync(libpath.join(SYNTHETIC_REGISTRY, name, version, 'index.json'),
+                libfs.readFileSync(pkgPath));
+    }
+
+    return index.versions[version] ?
+        Promise.resolve(pkgVersion) : // ignoring existing versions
+        new Promise(function (resolve, reject) {
+            // creating tarball
+            var dest = libpath.join(SYNTHETIC_REGISTRY, name, '-');
+
+            npm.load(function (err) {
+                var restore;
+                if (err) {
+                    return reject(err);
+                }
+                if (pkgJSON.scripts && pkgJSON.scripts.prepublish) {
+                    console.log('---> reacconditioning ' + pkgPath + ' (' + version + ')');
+                    restore = true;
+                    delete pkgJSON.scripts.prepublish;
+                    libfs.writeFileSync(pkgPath, JSON.stringify(pkgJSON, null, 2));
+                }
+                npm.pack(libpath.dirname(pkgPath), function () {
+
+                    var filename = name + '-' + version + '.tgz';
+                    var tarball = libpath.join(process.cwd(), filename);
+                    var tgz;
+
+                    try {
+                        tgz = libfs.readFileSync(tarball);
+                    } catch (e) {
+                        return reject(new Error('---> failing to pack ' + pkgPath + ' due to semven conflicts.'));
+                    }
+                    libfs.writeFileSync(libpath.join(dest, filename), tgz);
+
+                    libfs.unlink(tarball);
+                    // restoring the original package.json when needed
+                    if (restore) {
+                        console.log('---> restoring ' + pkgPath);
+                        libfs.writeFileSync(pkgPath,
+                                libfs.readFileSync(libpath.join(SYNTHETIC_REGISTRY, name, version, 'index.json')));
+                    }
+                    resolve(libpath.join(dest, filename));
+                });
+            });
+        })
+            .then(function (tarball) {
+                return new Promise(function (resolve, reject) {
+                    // computing shasum
+                    sha.get(tarball, function (er, shasum) {
+                        if (er) {
+                            return reject(er);
+                        }
+                        resolve(shasum);
+                    });
+                });
+            })
+            .then(function (shasum) {
+                var latest = index['dist-tags'].latest;
+                // updating index.json
+                index.versions[version] = {
+                    dist: {
+                        shasum: shasum,
+                        tarball: "http://my.registry.com/" + name + "/-/" + name + "-" + version + ".tgz"
+                    }
+                };
+                if (!latest || semver.gt(version, latest)) {
+                    index['dist-tags'].latest = version;
+                }
+                libfs.writeFileSync(libpath.join(SYNTHETIC_REGISTRY, name, 'index.json'),
+                        JSON.stringify(index, null, 2));
+
+                return index.versions[version].dist.tarball;
+            })
+            .then(null, function () {
+                return null;
+            });
+
+}))
+    .then(function (tarballs) {
+        tarballs = tarballs.filter(function (i) {
+            return i && i.indexOf('http://my.registry.com') === 0;
+        });
+        console.log('Packages Analyzed: ' + Object.keys(pkgs).length);
+        console.log('Packages Generated: ' + tarballs.length);
+    })
+    .catch(function (err) {
+        console.error('Fatal error: ' + err);
+    });

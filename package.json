@@ -1,0 +1,28 @@
+{
+  "name": "npm-mirror",
+  "version": "1.0.0",
+  "description": "serve a static, flat file based npm registry",
+  "bin": {
+    "create-npm-registry": "./bin/build"
+  },
+  "main": "./server.js",
+  "dependencies": {
+    "express": "^4.4.5",
+    "express-state": "^1.2.0",
+    "npm": "^2.1.6",
+    "semver": "^3.0.1",
+    "sha": "^1.3.0",
+    "walk": "^2.3.3",
+    "ypromise": "^0.2.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:caridy/npm-mirror.git"
+  },
+  "author": "Caridy Patiño <caridy@gmail.com>",
+  "license": "BSD",
+  "bugs": {
+    "url": "https://github.com/caridy/npm-mirror/issues"
+  },
+  "homepage": "https://github.com/caridy/npm-mirror"
+}
