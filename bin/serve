@@ -1,0 +1,9 @@
+#!/usr/bin/env node
+
+var path = require('path');
+
+if (process.argv[2]) {
+  global.StaticRegistryPath = path.resolve(process.cwd(), process.argv[2]);
+}
+
+require('../server.js');

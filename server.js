@@ -14,7 +14,7 @@ var router = express.Router({
 
 app.use(router);
 
-var STATIC_REGISTRY = libpath.join(__dirname, 'static-registry');
+var STATIC_REGISTRY = global.StaticRegistryPath || libpath.join(__dirname, 'static-registry');
 var SYNTHETIC_REGISTRY = libpath.join(__dirname, 'synthetic-registry');
 
 router.use(function (req, res, next) {

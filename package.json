@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "serve a static, flat file based npm registry",
   "bin": {
-    "create-npm-registry": "./bin/build"
+    "create-npm-registry": "./bin/build",
+    "serve-npm-registry": "./bin/serve"
   },
   "main": "./server.js",
   "dependencies": {
